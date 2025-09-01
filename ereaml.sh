@@ -24,11 +24,15 @@ NC='\033[0m' # 无颜色
 
 # 检查并安装依赖
 check_dependencies() {
-    local deps=("curl" "wget" "cron")
+    # 增加 ss (iproute2) 作为依赖
+    local deps=("curl" "wget" "cron" "iproute2")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
         if ! command -v $dep &> /dev/null; then
+            if [[ "$dep" == "iproute2" ]] && command -v ss &> /dev/null; then
+                continue
+            fi
             missing_deps+=("$dep")
         fi
     done
@@ -279,23 +283,38 @@ add_rule() {
     echo -e "${GREEN}添加转发规则${NC}"
     
     read -p "请输入本地监听端口: " local_port
+    
+    # 验证输入是否为1-65535之间的数字
+    if ! [[ $local_port =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
+        echo -e "${RED}错误: 本地端口无效! 添加失败，原因: 端口必须是1-65535之间的数字。${NC}"
+        sleep 2
+        return 1
+    fi
+    
+    # 使用ss命令检测端口是否被系统其他程序占用 (TCP或UDP)
+    if ss -tln | grep -q ":$local_port " || ss -uln | grep -q ":$local_port "; then
+        echo -e "${RED}错误: 添加失败，原因: 端口 $local_port 正在被其他程序占用!${NC}"
+        sleep 2
+        return 1
+    fi
+    
+    # 检查配置文件中是否已存在相同监听端口的规则
+    if grep -q "listen = \"0.0.0.0:$local_port\"" $CONFIG_FILE; then
+        echo -e "${RED}错误: 添加失败，原因: 本地端口 $local_port 已被其他转发规则占用!${NC}"
+        sleep 2
+        return 1
+    fi
+
+    echo -e "${GREEN}端口 $local_port 可用，请继续...${NC}"
+    
     read -p "请输入远程服务器地址: " remote_addr
     read -p "请输入远程服务器端口: " remote_port
     read -p "请输入规则备注(可选，直接回车跳过): " comment
     
-    # 验证输入
-    if ! [[ $local_port =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
-        echo -e "${RED}错误: 本地端口必须是1-65535之间的数字!${NC}"
-        return 1
-    fi
+    # 验证远程端口输入
     if ! [[ $remote_port =~ ^[0-9]+$ ]] || [ "$remote_port" -lt 1 ] || [ "$remote_port" -gt 65535 ]; then
-        echo -e "${RED}错误: 远程端口必须是1-65535之间的数字!${NC}"
-        return 1
-    fi
-    
-    # 检查是否已存在相同监听端口的规则
-    if grep -q "listen = \"0.0.0.0:$local_port\"" $CONFIG_FILE; then
-        echo -e "${RED}错误: 本地端口 $local_port 已被其他规则占用!${NC}"
+        echo -e "${RED}错误: 远程端口无效! 添加失败，原因: 端口必须是1-65535之间的数字。${NC}"
+        sleep 2
         return 1
     fi
     
