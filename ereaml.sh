@@ -282,30 +282,36 @@ uninstall_realm() {
 add_rule() {
     echo -e "${GREEN}添加转发规则${NC}"
     
-    read -p "请输入本地监听端口: " local_port
-    
-    # 验证输入是否为1-65535之间的数字
-    if ! [[ $local_port =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
-        echo -e "${RED}错误: 本地端口无效! 添加失败，原因: 端口必须是1-65535之间的数字。${NC}"
-        sleep 2
-        return 1
-    fi
-    
-    # 使用ss命令检测端口是否被系统其他程序占用 (TCP或UDP)
-    if ss -tln | grep -q ":$local_port " || ss -uln | grep -q ":$local_port "; then
-        echo -e "${RED}错误: 添加失败，原因: 端口 $local_port 正在被其他程序占用!${NC}"
-        sleep 2
-        return 1
-    fi
-    
-    # 检查配置文件中是否已存在相同监听端口的规则
-    if grep -q "listen = \"0.0.0.0:$local_port\"" $CONFIG_FILE; then
-        echo -e "${RED}错误: 添加失败，原因: 本地端口 $local_port 已被其他转发规则占用!${NC}"
-        sleep 2
-        return 1
-    fi
+    while true; do
+        read -p "请输入本地监听端口 (输入 0 返回): " local_port
 
-    echo -e "${GREEN}端口 $local_port 可用，请继续...${NC}"
+        # 允许用户输入0返回
+        if [[ "$local_port" == "0" ]]; then
+            return
+        fi
+        
+        # 验证输入是否为1-65535之间的数字
+        if ! [[ $local_port =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
+            echo -e "${RED}错误: 端口无效! 必须是1-65535之间的数字，请重新输入。${NC}"
+            continue
+        fi
+        
+        # 使用ss命令检测端口是否被系统其他程序占用 (TCP或UDP)
+        if ss -tln | grep -q ":$local_port " || ss -uln | grep -q ":$local_port "; then
+            echo -e "${RED}错误: 端口 $local_port 正在被其他程序占用，请重新输入!${NC}"
+            continue
+        fi
+        
+        # 检查配置文件中是否已存在相同监听端口的规则
+        if grep -q "listen = \"0.0.0.0:$local_port\"" $CONFIG_FILE; then
+            echo -e "${RED}错误: 本地端口 $local_port 已被其他转发规则占用，请重新输入!${NC}"
+            continue
+        fi
+
+        # 如果所有检查都通过，则跳出循环
+        echo -e "${GREEN}端口 $local_port 可用，请继续...${NC}"
+        break
+    done
     
     read -p "请输入远程服务器地址: " remote_addr
     read -p "请输入远程服务器端口: " remote_port
@@ -341,6 +347,7 @@ EOF
     fi
     sleep 1
 }
+
 
 # 查看转发规则
 view_rules() {
