@@ -77,7 +77,7 @@ show_main_menu() {
     echo -e "${CYAN}                E-Realm 转发面板${NC}"
     echo -e "${CYAN}==================================================${NC}"
     echo -e "面板版本: ${GREEN}v${PANEL_VERSION}${NC}"
-    echo -e "Realm 版本: ${GREEN}v${REALM_VERSION}${NC}"
+    echo -e "Realm版本: ${GREEN}v${REALM_VERSION}${NC}"
     echo -e "更新日志: ${YELLOW}${UPDATE_LOG}${NC}"
     echo -e "${CYAN}--------------------------------------------------${NC}"
     echo -e "服务状态: $status"
