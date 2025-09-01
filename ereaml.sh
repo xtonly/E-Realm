@@ -2,13 +2,13 @@
 
 # ==============================================================================
 # E-Realm 管理面板
-# PANEL_VERSION="1.1.0"
-# REALM_VERSION="2.9.2"
-# 更新日志 (v1.1.0):
-# Correction 1:添加规则时加入端口检测.
+# ==============================================================================
+PANEL_VERSION="1.1.0"
+REALM_VERSION="2.9.2"
+UPDATE_LOG="v1.1.0: 添加规则时加入端口检测."
 # ==============================================================================
 
-REALM_URL="https://github.com/zhboner/realm/releases/download/v2.9.2/realm-x86_64-unknown-linux-gnu.tar.gz"
+REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
 CONFIG_DIR="/etc/realm"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 BACKUP_DIR="/opt/realm_backups"
@@ -74,9 +74,12 @@ show_main_menu() {
     local status=$(get_service_status)
     
     echo -e "${CYAN}==================================================${NC}"
-    echo -e "${CYAN}            E-Realm 转发面板 $PANEL_VERSION${NC}"
+    echo -e "${CYAN}                E-Realm 转发面板${NC}"
     echo -e "${CYAN}==================================================${NC}"
-    echo -e "Realm 版本: ${GREEN}$REALM_VERSION${NC}"
+    echo -e "面板版本: ${GREEN}v${PANEL_VERSION}${NC}"
+    echo -e "Realm 版本: ${GREEN}v${REALM_VERSION}${NC}"
+    echo -e "更新日志: ${YELLOW}${UPDATE_LOG}${NC}"
+    echo -e "${CYAN}--------------------------------------------------${NC}"
     echo -e "服务状态: $status"
     echo -e "转发规则: ${GREEN}$rule_count 条${NC}"
     echo -e "${CYAN}==================================================${NC}"
