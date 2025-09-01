@@ -1,8 +1,13 @@
 #!/bin/bash
 
+# ==============================================================================
 # E-Realm 管理面板
-PANEL_VERSION="1.1.0"
-REALM_VERSION="2.9.2"
+# PANEL_VERSION="1.1.0"
+# REALM_VERSION="2.9.2"
+# 更新日志 (v1.1.0):
+# Correction 1:添加规则时加入端口检测.
+# ==============================================================================
+
 REALM_URL="https://github.com/zhboner/realm/releases/download/v2.9.2/realm-x86_64-unknown-linux-gnu.tar.gz"
 CONFIG_DIR="/etc/realm"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
