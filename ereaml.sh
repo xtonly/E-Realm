@@ -3,8 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.0"
+PANEL_VERSION="1.1.1"
 REALM_VERSION="2.9.2"
+UPDATE_LOG="v1.1.1: 添加规则修改."
 UPDATE_LOG="v1.1.0: 添加规则时加入端口检测."
 # ==============================================================================
 
@@ -106,7 +107,7 @@ show_rule_menu() {
     echo "1. 添加转发规则"
     echo "2. 查看转发规则"
     echo "3. 删除转发规则"
-    echo "4. 编辑规则备注"
+    echo "4. 编辑转发规则"
     echo "00. 返回主菜单"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
@@ -500,9 +501,9 @@ delete_rule() {
     sleep 1
 }
 
-# 编辑规则备注
-edit_comment() {
-    echo -e "${GREEN}编辑规则备注${NC}"
+# 编辑转发规则
+edit_rule() {
+    echo -e "${GREEN}编辑转发规则${NC}"
     
     local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
     if [ $rule_count -eq 0 ]; then
@@ -535,7 +536,7 @@ edit_comment() {
     }' $CONFIG_FILE
     
     echo
-    read -p "请输入要编辑备注的规则编号: " rule_id
+    read -p "请输入要编辑的规则编号: " rule_id
     
     if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
         echo -e "${RED}无效的规则编号!${NC}"
@@ -543,60 +544,109 @@ edit_comment() {
         return
     fi
     
-    # 查找规则开始行
-    local start_line=$(awk -v target="$rule_id" '
+    # 提取并解析当前规则的值
+    local current_values=$(awk -v target="$rule_id" '
     BEGIN { count = 0 }
     /\[\[endpoints\]\]/ {
         count++
         if (count == target) {
-            print NR
+            getline; listen=$2;
+            getline; remote=$2;
+            getline; comment="";
+            if ($0 ~ /^# /) { comment=substr($0, 3) }
+            print listen "|" remote "|" comment
             exit
         }
-    }' $CONFIG_FILE)
+    }' $CONFIG_FILE | sed 's/"//g')
+
+    local current_listen=$(echo "$current_values" | cut -d'|' -f1)
+    local current_remote=$(echo "$current_values" | cut -d'|' -f2)
+    local current_comment=$(echo "$current_values" | cut -d'|' -f3)
     
-    # 查找备注行（如果有）
+    local current_local_port=$(echo "$current_listen" | cut -d':' -f2)
+    local current_remote_addr=$(echo "$current_remote" | cut -d':' -f1)
+    local current_remote_port=$(echo "$current_remote" | cut -d':' -f2)
+
+    echo -e "${CYAN}--------------------------------------------------${NC}"
+    echo "正在编辑规则 #${rule_id}. 请输入新值, 或按 Enter 保留当前值."
+    
+    # 获取新的本地端口
+    while true; do
+        read -p "新本地监听端口 [当前: $current_local_port]: " new_local_port
+        new_local_port=${new_local_port:-$current_local_port}
+        
+        if ! [[ $new_local_port =~ ^[0-9]+$ ]] || [ "$new_local_port" -lt 1 ] || [ "$new_local_port" -gt 65535 ]; then
+            echo -e "${RED}错误: 端口无效! 必须是1-65535之间的数字。${NC}"
+            continue
+        fi
+        
+        if [ "$new_local_port" != "$current_local_port" ]; then
+            if ss -tln | grep -q ":$new_local_port " || ss -uln | grep -q ":$new_local_port "; then
+                echo -e "${RED}错误: 端口 $new_local_port 正在被其他程序占用!${NC}"
+                continue
+            fi
+            if grep -q "listen = \"0.0.0.0:$new_local_port\"" $CONFIG_FILE; then
+                echo -e "${RED}错误: 本地端口 $new_local_port 已被其他转发规则占用!${NC}"
+                continue
+            fi
+        fi
+        break
+    done
+
+    # 获取新的远程地址
+    read -p "新远程服务器地址 [当前: $current_remote_addr]: " new_remote_addr
+    new_remote_addr=${new_remote_addr:-$current_remote_addr}
+    
+    # 获取新的远程端口
+    while true; do
+        read -p "新远程服务器端口 [当前: $current_remote_port]: " new_remote_port
+        new_remote_port=${new_remote_port:-$current_remote_port}
+        if ! [[ $new_remote_port =~ ^[0-9]+$ ]] || [ "$new_remote_port" -lt 1 ] || [ "$new_remote_port" -gt 65535 ]; then
+            echo -e "${RED}错误: 远程端口无效! 必须是1-65535之间的数字。${NC}"
+            continue
+        fi
+        break
+    done
+    
+    # 获取新的备注
+    read -p "新规则备注 [当前: $current_comment]: " new_comment
+    new_comment=${new_comment:-$current_comment}
+    echo -e "${CYAN}--------------------------------------------------${NC}"
+
+    # 查找规则的起始行
+    local start_line=$(awk -v target="$rule_id" 'BEGIN {c=0} /\[\[endpoints\]\]/{c++; if(c==target){print NR; exit}}' $CONFIG_FILE)
+    local listen_line=$((start_line + 1))
+    local remote_line=$((start_line + 2))
+
+    # 查找可能存在的备注行
     local comment_line=$(awk -v start="$start_line" '
-    NR > start + 2 && /^# / {
-        print NR
-        exit
-    }
-    NR > start + 2 && /\[\[endpoints\]\]/ {
-        exit
-    }' $CONFIG_FILE)
-    
-    read -p "请输入新的规则备注(直接回车清除备注): " new_comment
-    
-    # 创建临时文件
-    local temp_file=$(mktemp)
-    
+    NR > start + 2 && /^# / { print NR; exit }
+    NR > start + 2 && /\[\[endpoints\]\]/ { exit }' $CONFIG_FILE)
+
+    # 应用修改
+    sed -i "${listen_line}s/.*/listen = \"0.0.0.0:$new_local_port\"/" $CONFIG_FILE
+    sed -i "${remote_line}s/.*/remote = \"$new_remote_addr:$new_remote_port\"/" $CONFIG_FILE
+
+    # 处理备注
     if [ -n "$comment_line" ]; then
-        # 删除旧备注
         if [ -z "$new_comment" ]; then
-            # 清除备注
-            sed "${comment_line}d" $CONFIG_FILE > $temp_file
+            sed -i "${comment_line}d" $CONFIG_FILE
         else
-            # 替换备注
-            sed "${comment_line}s/.*/# $new_comment/" $CONFIG_FILE > $temp_file
+            sed -i "${comment_line}s/.*/# $new_comment/" $CONFIG_FILE
         fi
     else
-        # 添加新备注
         if [ -n "$new_comment" ]; then
-            awk -v line="$start_line" -v comment="$new_comment" '
-            NR == line + 3 {
-                print "# " comment
-            }
-            { print }
-            ' $CONFIG_FILE > $temp_file
-        else
-            # 没有备注且不需要添加，直接复制
-            cp $CONFIG_FILE $temp_file
+            sed -i "${remote_line}a# $new_comment" $CONFIG_FILE
         fi
     fi
+
+    echo -e "${GREEN}规则 #${rule_id} 更新成功!${NC}"
     
-    # 替换原配置文件
-    mv $temp_file $CONFIG_FILE
-    
-    echo -e "${GREEN}备注更新成功!${NC}"
+    read -p "是否立即重启服务使配置生效? (y/n): " restart
+    if [[ $restart == "y" || $restart == "Y" ]]; then
+        systemctl restart realm
+        echo -e "${GREEN}服务已重启!${NC}"
+    fi
     sleep 1
 }
 
@@ -715,7 +765,7 @@ main() {
                         1) add_rule ;;
                         2) view_rules ;;
                         3) delete_rule ;;
-                        4) edit_comment ;;
+                        4) edit_rule ;;
                         00) break ;;
                         *) echo -e "${RED}无效选择!${NC}"; sleep 1 ;;
                     esac
