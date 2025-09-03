@@ -70,7 +70,7 @@ get_service_status() {
 # 显示主菜单
 show_main_menu() {
     clear
-    local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
+    local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
     local status=$(get_service_status)
     
     echo -e "${CYAN}==================================================${NC}"
@@ -97,7 +97,7 @@ show_main_menu() {
 # 显示转发规则管理菜单
 show_rule_menu() {
     clear
-    local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
+    local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
     
     echo -e "${CYAN}==================================================${NC}"
     echo -e "${CYAN}                 转发规则管理${NC}"
@@ -140,7 +140,7 @@ show_service_menu() {
 # 显示备份与恢复菜单
 show_backup_menu() {
     clear
-    local backup_count=$(ls -1 $BACKUP_DIR/*.toml 2>/dev/null | wc -l)
+    local backup_count=$(ls -1 "$BACKUP_DIR"/*.toml 2>/dev/null | wc -l)
     
     echo -e "${CYAN}==================================================${NC}"
     echo -e "${CYAN}                 备份与恢复${NC}"
@@ -161,10 +161,10 @@ fix_service_config() {
     systemctl stop realm 2>/dev/null
     
     # 删除旧的服务文件
-    rm -f $SERVICE_FILE
+    rm -f "$SERVICE_FILE"
     
     # 创建新的服务文件
-    cat > $SERVICE_FILE <<EOF
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Realm Port Forwarding
 After=network.target
@@ -172,7 +172,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/realm -c $CONFIG_FILE
+ExecStart=/usr/local/bin/realm -c "$CONFIG_FILE"
 Restart=on-failure
 RestartSec=5s
 
@@ -201,12 +201,12 @@ install_realm() {
     fi
     
     # 创建配置目录
-    mkdir -p $CONFIG_DIR
-    mkdir -p $BACKUP_DIR
+    mkdir -p "$CONFIG_DIR"
+    mkdir -p "$BACKUP_DIR"
     
     # 下载并安装 Realm
     cd /tmp
-    wget $REALM_URL -O realm.tar.gz
+    wget "$REALM_URL" -O realm.tar.gz
     tar -xzf realm.tar.gz
     mv realm /usr/local/bin/
     chmod +x /usr/local/bin/realm
@@ -215,8 +215,8 @@ install_realm() {
     rm -f "$CONFIG_DIR/config.json"
     
     # 创建初始配置文件 (TOML格式)
-    if [ ! -f $CONFIG_FILE ]; then
-        cat > $CONFIG_FILE << 'EOF'
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat > "$CONFIG_FILE" << 'EOF'
 [log]
 level = "warn"
 
@@ -247,7 +247,7 @@ EOF
     chmod +x /opt/realm_monitor.sh
     
     # 设置定时任务检查活性 (改为20分钟一次)
-    echo "*/20 * * * * root /opt/realm_monitor.sh" > $CRON_FILE
+    echo "*/20 * * * * root /opt/realm_monitor.sh" > "$CRON_FILE"
     
     # 启动服务
     systemctl start realm
@@ -273,8 +273,8 @@ uninstall_realm() {
     
     # 删除文件
     rm -f /usr/local/bin/realm
-    rm -f $SERVICE_FILE
-    rm -f $CRON_FILE
+    rm -f "$SERVICE_FILE"
+    rm -f "$CRON_FILE"
     rm -f /opt/realm_monitor.sh
     
     # 重新加载系统服务
@@ -311,7 +311,7 @@ add_rule() {
         fi
         
         # 检查配置文件中是否已存在相同监听端口的规则
-        if grep -q "listen = \"0.0.0.0:$local_port\"" $CONFIG_FILE; then
+        if grep -q "listen = \"0.0.0.0:$local_port\"" "$CONFIG_FILE"; then
             echo -e "${RED}错误: 本地端口 $local_port 已被其他转发规则占用，请重新输入!${NC}"
             continue
         fi
@@ -333,7 +333,7 @@ add_rule() {
     fi
     
     # 添加新规则到配置文件
-    cat >> $CONFIG_FILE <<EOF
+    cat >> "$CONFIG_FILE" <<EOF
 
 [[endpoints]]
 listen = "0.0.0.0:$local_port"
@@ -342,7 +342,7 @@ EOF
     
     # 添加备注（如果有）
     if [ -n "$comment" ]; then
-        sed -i "\$a\# $comment" $CONFIG_FILE
+        sed -i "\$a\# $comment" "$CONFIG_FILE"
     fi
     
     echo -e "${GREEN}规则添加成功!${NC}"
@@ -360,7 +360,7 @@ EOF
 # 查看转发规则
 view_rules() {
     echo -e "${GREEN}当前转发规则:${NC}"
-    local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
+    local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
     
     if [ $rule_count -eq 0 ]; then
         echo "暂无转发规则"
@@ -385,7 +385,7 @@ view_rules() {
                 printf " (备注: %s)", comment
             }
             printf "\n"
-        }' $CONFIG_FILE
+        }' "$CONFIG_FILE"
     fi
     echo -e "\n按回车键返回..."
     read
@@ -395,8 +395,8 @@ view_rules() {
 delete_rule() {
     echo -e "${GREEN}删除转发规则${NC}"
     
-    local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
-    if [ $rule_count -eq 0 ]; then
+    local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
+    if [ "$rule_count" -eq 0 ]; then
         echo "暂无转发规则可删除"
         sleep 1
         return
@@ -423,7 +423,7 @@ delete_rule() {
             printf " (备注: %s)", comment
         }
         printf "\n"
-    }' $CONFIG_FILE
+    }' "$CONFIG_FILE"
     
     echo
     echo -e "${YELLOW}请输入要删除的规则编号，多个编号用空格分隔 (如: 1 2 3 或 1 3):${NC}"
@@ -462,7 +462,7 @@ delete_rule() {
                 print NR
                 exit
             }
-        }' $CONFIG_FILE)
+        }' "$CONFIG_FILE")
         
         if [ -z "$start_line" ]; then
             echo -e "${RED}找不到规则 $rule_id${NC}"
@@ -477,17 +477,17 @@ delete_rule() {
         }
         END {
             if (NR >= start) print NR
-        }' $CONFIG_FILE)
+        }' "$CONFIG_FILE")
         
         # 删除规则块（包括备注）
-        sed "${start_line},${end_line}d" $CONFIG_FILE > $temp_file
-        mv $temp_file $CONFIG_FILE
+        sed "${start_line},${end_line}d" "$CONFIG_FILE" > "$temp_file"
+        mv "$temp_file" "$CONFIG_FILE"
         temp_file=$(mktemp)
-        cp $CONFIG_FILE $temp_file
+        cp "$CONFIG_FILE" "$temp_file"
     done
     
     # 清理临时文件
-    rm -f $temp_file
+    rm -f "$temp_file"
     
     echo -e "${GREEN}规则删除成功!${NC}"
     
@@ -504,8 +504,8 @@ delete_rule() {
 edit_rule() {
     echo -e "${GREEN}修改转发规则${NC}"
     
-    local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
-    if [ $rule_count -eq 0 ]; then
+    local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
+    if [ "$rule_count" -eq 0 ]; then
         echo "暂无转发规则可修改"
         sleep 1
         return
@@ -532,7 +532,7 @@ edit_rule() {
             printf " (备注: %s)", comment
         }
         printf "\n"
-    }' $CONFIG_FILE
+    }' "$CONFIG_FILE"
     
     echo
     read -p "请输入要修改的规则编号: " rule_id
@@ -558,7 +558,7 @@ edit_rule() {
             print listen "|" remote "|" comment
             exit
         }
-    }' $CONFIG_FILE)
+    }' "$CONFIG_FILE")
 
     local current_listen=$(echo "$current_values" | cut -d'|' -f1)
     local current_remote=$(echo "$current_values" | cut -d'|' -f2)
@@ -587,7 +587,7 @@ edit_rule() {
                 echo -e "${RED}错误: 端口 $new_local_port 正在被其他程序占用!${NC}"
                 continue
             fi
-            if grep -q "listen = \"0.0.0.0:$new_local_port\"" $CONFIG_FILE; then
+            if grep -q "listen = \"0.0.0.0:$new_local_port\"" "$CONFIG_FILE"; then
                 echo -e "${RED}错误: 本地端口 $new_local_port 已被其他转发规则占用!${NC}"
                 continue
             fi
@@ -616,29 +616,29 @@ edit_rule() {
     echo -e "${CYAN}--------------------------------------------------${NC}"
 
     # 查找规则的起始行
-    local start_line=$(awk -v target="$rule_id" 'BEGIN {c=0} /\[\[endpoints\]\]/{c++; if(c==target){print NR; exit}}' $CONFIG_FILE)
+    local start_line=$(awk -v target="$rule_id" 'BEGIN {c=0} /\[\[endpoints\]\]/{c++; if(c==target){print NR; exit}}' "$CONFIG_FILE")
     local listen_line=$((start_line + 1))
     local remote_line=$((start_line + 2))
 
     # 查找可能存在的备注行
     local comment_line=$(awk -v start="$start_line" '
     NR > start + 2 && /^# / { print NR; exit }
-    NR > start + 2 && /\[\[endpoints\]\]/ { exit }' $CONFIG_FILE)
+    NR > start + 2 && /\[\[endpoints\]\]/ { exit }' "$CONFIG_FILE")
 
     # 应用修改
-    sed -i "${listen_line}s/.*/listen = \"0.0.0.0:$new_local_port\"/" $CONFIG_FILE
-    sed -i "${remote_line}s/.*/remote = \"$new_remote_addr:$new_remote_port\"/" $CONFIG_FILE
+    sed -i "${listen_line}s/.*/listen = \"0.0.0.0:$new_local_port\"/" "$CONFIG_FILE"
+    sed -i "${remote_line}s/.*/remote = \"$new_remote_addr:$new_remote_port\"/" "$CONFIG_FILE"
 
     # 处理备注
     if [ -n "$comment_line" ]; then
         if [ -z "$new_comment" ]; then
-            sed -i "${comment_line}d" $CONFIG_FILE
+            sed -i "${comment_line}d" "$CONFIG_FILE"
         else
-            sed -i "${comment_line}s/.*/# $new_comment/" $CONFIG_FILE
+            sed -i "${comment_line}s/.*/# $new_comment/" "$CONFIG_FILE"
         fi
     else
         if [ -n "$new_comment" ]; then
-            sed -i "${remote_line}a# $new_comment" $CONFIG_FILE
+            sed -i "${remote_line}a# $new_comment" "$CONFIG_FILE"
         fi
     fi
 
@@ -679,8 +679,8 @@ backup_config() {
     local timestamp=$(date +%Y%m%d_%H%M%S)
     local backup_file="$BACKUP_DIR/${HOSTNAME}_backup_$timestamp.toml"
     
-    mkdir -p $BACKUP_DIR
-    cp $CONFIG_FILE $backup_file
+    mkdir -p "$BACKUP_DIR"
+    cp "$CONFIG_FILE" "$backup_file"
     echo -e "${PURPLE}==================================================${NC}"
     echo -e "${PURPLE}                 备份完成!${NC}"
     echo -e "${PURPLE}    备份文件路径: $backup_file${NC}"
@@ -692,8 +692,8 @@ backup_config() {
 # 恢复备份
 restore_backup() {
     echo -e "${GREEN}可用的备份文件:${NC}"
-    mkdir -p $BACKUP_DIR
-    local backups=($(ls -1 $BACKUP_DIR/*.toml 2>/dev/null))
+    mkdir -p "$BACKUP_DIR"
+    local backups=($(ls -1 "$BACKUP_DIR"/*.toml 2>/dev/null))
     
     if [ ${#backups[@]} -eq 0 ]; then
         echo "暂无备份文件"
@@ -714,7 +714,7 @@ restore_backup() {
         return
     fi
     
-    cp "${backups[$backup_id]}" $CONFIG_FILE
+    cp "${backups[$backup_id]}" "$CONFIG_FILE"
     echo -e "${GREEN}配置已从 ${backups[$backup_id]} 恢复${NC}"
     
     # 询问是否重启服务
@@ -746,7 +746,7 @@ main() {
     check_dependencies
     
     # 检查服务配置是否正确
-    if [ -f $SERVICE_FILE ] && grep -q "config.json" $SERVICE_FILE 2>/dev/null; then
+    if [ -f "$SERVICE_FILE" ] && grep -q "config.json" "$SERVICE_FILE" 2>/dev/null; then
         echo -e "${YELLOW}检测到旧的服务配置，正在修复...${NC}"
         fix_service_config
     fi
