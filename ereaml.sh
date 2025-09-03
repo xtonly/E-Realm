@@ -5,8 +5,7 @@
 # ==============================================================================
 PANEL_VERSION="1.1.1"
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.1: 添加规则修改."
-UPDATE_LOG="v1.1.0: 添加规则时加入端口检测."
+UPDATE_LOG="v1.1.1: 增强编辑功能, 可修改转发规则所有项."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -107,7 +106,7 @@ show_rule_menu() {
     echo "1. 添加转发规则"
     echo "2. 查看转发规则"
     echo "3. 删除转发规则"
-    echo "4. 编辑转发规则"
+    echo "4. 修改转发规则"
     echo "00. 返回主菜单"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
@@ -501,13 +500,13 @@ delete_rule() {
     sleep 1
 }
 
-# 编辑转发规则
+# 修改转发规则
 edit_rule() {
-    echo -e "${GREEN}编辑转发规则${NC}"
+    echo -e "${GREEN}修改转发规则${NC}"
     
     local rule_count=$(grep -c "\[\[endpoints\]\]" $CONFIG_FILE 2>/dev/null || echo "0")
     if [ $rule_count -eq 0 ]; then
-        echo "暂无转发规则可编辑"
+        echo "暂无转发规则可修改"
         sleep 1
         return
     fi
@@ -536,7 +535,7 @@ edit_rule() {
     }' $CONFIG_FILE
     
     echo
-    read -p "请输入要编辑的规则编号: " rule_id
+    read -p "请输入要修改的规则编号: " rule_id
     
     if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
         echo -e "${RED}无效的规则编号!${NC}"
@@ -568,7 +567,7 @@ edit_rule() {
     local current_remote_port=$(echo "$current_remote" | cut -d':' -f2)
 
     echo -e "${CYAN}--------------------------------------------------${NC}"
-    echo "正在编辑规则 #${rule_id}. 请输入新值, 或按 Enter 保留当前值."
+    echo "正在修改规则 #${rule_id}. 请输入新值, 或按 Enter 保留当前值."
     
     # 获取新的本地端口
     while true; do
