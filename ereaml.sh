@@ -3,9 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.2"
+PANEL_VERSION="1.1.3"
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.2: 修复修改规则时无法正确获取原值及端口检测冲突的Bug."
+UPDATE_LOG="v1.1.3: 重写删除规则逻辑, 彻底修复多规则删除报错问题."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -411,12 +411,10 @@ delete_rule() {
         listen = $2
         getline
         remote = $2
-        # 检查是否有备注
         comment = ""
         getline
         if ($0 ~ /^# /) {
             comment = substr($0, 3)
-            getline
         }
         printf "%-4d: 本地: %s -> 远程: %s", rule_num, listen, remote
         if (comment != "") {
@@ -429,31 +427,24 @@ delete_rule() {
     echo -e "${YELLOW}请输入要删除的规则编号，多个编号用空格分隔 (如: 1 2 3 或 1 3):${NC}"
     read -p "请输入: " rule_ids
     
-    # 验证输入是否为空
     if [ -z "$rule_ids" ]; then
         echo -e "${RED}未输入任何规则编号!${NC}"
         sleep 1
         return
     fi
     
-    # 将输入转换为数组并排序（从大到小排序，这样删除时不会影响索引）
-    local sorted_rule_ids=($(echo $rule_ids | tr ' ' '\n' | sort -nr | uniq))
-    
-    # 验证每个规则编号是否有效
+    local sorted_rule_ids=($(echo "$rule_ids" | tr ' ' '\n' | sort -nr | uniq))
+    local sed_expressions=()
+    local all_rules_found=true
+
     for rule_id in "${sorted_rule_ids[@]}"; do
         if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
-            echo -e "${RED}无效的规则编号: $rule_id${NC}"
-            sleep 1
-            return
+            echo -e "${RED}错误: 无效的规则编号: $rule_id${NC}"
+            all_rules_found=false
+            continue
         fi
-    done
-    
-    # 创建临时文件
-    local temp_file=$(mktemp)
-    
-    # 使用awk删除指定规则（从大到小删除，避免索引变化问题）
-    for rule_id in "${sorted_rule_ids[@]}"; do
-        # 计算要删除的规则的行范围（包括备注）
+
+        # 根据原始配置文件计算行号范围
         local start_line=$(awk -v target="$rule_id" '
         BEGIN { count = 0 }
         /\[\[endpoints\]\]/ {
@@ -465,11 +456,11 @@ delete_rule() {
         }' "$CONFIG_FILE")
         
         if [ -z "$start_line" ]; then
-            echo -e "${RED}找不到规则 $rule_id${NC}"
+            echo -e "${RED}警告: 无法在原始配置中定位规则 #${rule_id}，已跳过。${NC}"
+            all_rules_found=false
             continue
         fi
         
-        # 查找结束行（下一个规则开始或文件结束）
         local end_line=$(awk -v start="$start_line" '
         NR > start && /\[\[endpoints\]\]/ {
             print NR - 1
@@ -479,18 +470,25 @@ delete_rule() {
             if (NR >= start) print NR
         }' "$CONFIG_FILE")
         
-        # 删除规则块（包括备注）
-        sed "${start_line},${end_line}d" "$CONFIG_FILE" > "$temp_file"
-        mv "$temp_file" "$CONFIG_FILE"
-        temp_file=$(mktemp)
-        cp "$CONFIG_FILE" "$temp_file"
+        # 将sed删除命令添加到数组
+        sed_expressions+=("-e" "${start_line},${end_line}d")
     done
     
-    # 清理临时文件
-    rm -f "$temp_file"
+    # 检查是否收集到了任何有效的删除命令
+    if [ ${#sed_expressions[@]} -gt 0 ]; then
+        # 创建临时文件并执行一次性的sed删除操作
+        local temp_file=$(mktemp)
+        sed "${sed_expressions[@]}" "$CONFIG_FILE" > "$temp_file"
+        mv "$temp_file" "$CONFIG_FILE"
+        echo -e "${GREEN}选择的规则已成功删除!${NC}"
+    else
+        echo -e "${YELLOW}没有有效的规则被删除。${NC}"
+    fi
     
-    echo -e "${GREEN}规则删除成功!${NC}"
-    
+    if ! $all_rules_found; then
+        echo -e "${YELLOW}部分规则编号无效或未找到，请核对。${NC}"
+    fi
+
     # 询问是否重启服务
     read -p "是否立即重启服务使配置生效? (y/n): " restart
     if [[ $restart == "y" || $restart == "Y" ]]; then
