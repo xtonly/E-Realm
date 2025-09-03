@@ -3,9 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.4"
+PANEL_VERSION="1.1.5"
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.4: 彻底重构删除规则函数, 采用安全的'配置文件重建'逻辑."
+UPDATE_LOG="v1.1.5: 修复删除/修改规则时, 显示列表后需要多余回车的逻辑缺陷."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -361,12 +361,12 @@ EOF
 }
 
 
-# 查看转发规则
+# 查看转发规则 (可以接受 "wait" 参数来决定是否暂停)
 view_rules() {
     echo -e "${GREEN}当前转发规则:${NC}"
     local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
     
-    if [ $rule_count -eq 0 ]; then
+    if [ "$rule_count" -eq 0 ]; then
         echo "暂无转发规则"
     else
         # 提取并显示所有规则（包括备注）
@@ -389,8 +389,12 @@ view_rules() {
             printf "\n"
         }' "$CONFIG_FILE"
     fi
-    echo -e "\n按回车键返回..."
-    read
+
+    # 如果第一个参数是 "wait"，则暂停等待用户按回车
+    if [[ "$1" == "wait" ]]; then
+        echo -e "\n按回车键返回..."
+        read
+    fi
 }
 
 # 删除转发规则
@@ -404,7 +408,7 @@ delete_rule() {
         return
     fi
     
-    view_rules
+    view_rules # 调用 view_rules 显示列表，但不暂停
     
     echo
     echo -e "${YELLOW}请输入要删除的规则编号，多个编号用空格分隔 (如: 1 2 3 或 1 3):${NC}"
@@ -467,8 +471,8 @@ delete_rule() {
     }
     ' "$CONFIG_FILE" > "$temp_file"
     
-    # 安全检查：如果临时文件为空，说明可能出现严重错误，中止操作
-    if [ ! -s "$temp_file" ] && [ "$rule_count" -gt 0 ]; then
+    # 安全检查：如果临时文件为空，并且原始文件中有规则，说明可能出现严重错误，中止操作
+    if [ ! -s "$temp_file" ] && [ "$rule_count" -gt 0 ] && [ ${#rule_ids} -lt $rule_count ]; then
         echo -e "${RED}错误：处理后的配置文件为空！为安全起见，已中止删除操作。${NC}"
         rm -f "$temp_file"
         sleep 2
@@ -499,7 +503,7 @@ edit_rule() {
         return
     fi
     
-    view_rules
+    view_rules # 调用 view_rules 显示列表，但不暂停
     
     echo
     read -p "请输入要修改的规则编号: " rule_id
@@ -588,11 +592,11 @@ edit_rule() {
             rule_counter = 0;
             in_block = 0;
             skip_print = 0;
+            buffer = ""
         }
 
         /^\[\[endpoints\]\]/ {
             if (in_block) {
-                # This handles case where blocks are not separated by newlines
                 if (!skip_print) { printf "%s", buffer; }
             }
             buffer = "";
@@ -746,7 +750,7 @@ main() {
                     read rule_choice
                     case $rule_choice in
                         1) add_rule ;;
-                        2) view_rules ;;
+                        2) view_rules "wait" ;; # 直接查看时，传递 "wait" 参数
                         3) delete_rule ;;
                         4) edit_rule ;;
                         00) break ;;
