@@ -3,9 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.1"
+PANEL_VERSION="1.1.2"
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.1: 增强编辑功能, 可修改转发规则所有项."
+UPDATE_LOG="v1.1.2: 修复修改规则时无法正确获取原值及端口检测冲突的Bug."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -543,20 +543,22 @@ edit_rule() {
         return
     fi
     
-    # 提取并解析当前规则的值
-    local current_values=$(awk -v target="$rule_id" '
+    # BUG FIX: Switched to AWK with -F'"' to correctly parse values inside quotes.
+    local current_values=$(awk -F'"' -v target="$rule_id" '
     BEGIN { count = 0 }
     /\[\[endpoints\]\]/ {
         count++
         if (count == target) {
             getline; listen=$2;
             getline; remote=$2;
+            # Hold the current position
+            current_pos = RSTART + RLENGTH
             getline; comment="";
             if ($0 ~ /^# /) { comment=substr($0, 3) }
             print listen "|" remote "|" comment
             exit
         }
-    }' $CONFIG_FILE | sed 's/"//g')
+    }' $CONFIG_FILE)
 
     local current_listen=$(echo "$current_values" | cut -d'|' -f1)
     local current_remote=$(echo "$current_values" | cut -d'|' -f2)
@@ -579,6 +581,7 @@ edit_rule() {
             continue
         fi
         
+        # BUG FIX: This check now only runs if the port is actually changed.
         if [ "$new_local_port" != "$current_local_port" ]; then
             if ss -tln | grep -q ":$new_local_port " || ss -uln | grep -q ":$new_local_port "; then
                 echo -e "${RED}错误: 端口 $new_local_port 正在被其他程序占用!${NC}"
