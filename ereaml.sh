@@ -3,9 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.3"
+PANEL_VERSION="1.1.4"
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.3: 重写删除规则逻辑, 彻底修复多规则删除报错问题."
+UPDATE_LOG="v1.1.4: 彻底重构删除规则函数, 采用安全的'配置文件重建'逻辑."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -30,7 +30,7 @@ NC='\033[0m' # 无颜色
 # 检查并安装依赖
 check_dependencies() {
     # 增加 ss (iproute2) 作为依赖
-    local deps=("curl" "wget" "cron" "iproute2")
+    local deps=("curl" "wget" "cron" "iproute2" "awk")
     local missing_deps=()
     
     for dep in "${deps[@]}"; do
@@ -333,6 +333,10 @@ add_rule() {
     fi
     
     # 添加新规则到配置文件
+    # 确保文件末尾有换行符
+    if [ -s "$CONFIG_FILE" ] && [ "$(tail -c 1 "$CONFIG_FILE")" != "" ]; then
+        echo "" >> "$CONFIG_FILE"
+    fi
     cat >> "$CONFIG_FILE" <<EOF
 
 [[endpoints]]
@@ -342,7 +346,7 @@ EOF
     
     # 添加备注（如果有）
     if [ -n "$comment" ]; then
-        sed -i "\$a\# $comment" "$CONFIG_FILE"
+        echo "# $comment" >> "$CONFIG_FILE"
     fi
     
     echo -e "${GREEN}规则添加成功!${NC}"
@@ -373,12 +377,10 @@ view_rules() {
             listen = $2
             getline
             remote = $2
-            # 检查是否有备注
             comment = ""
-            getline
-            if ($0 ~ /^# /) {
+            # Safely check for a comment on the next line
+            if (getline > 0 && $0 ~ /^# /) {
                 comment = substr($0, 3)
-                getline
             }
             printf "%-4d: 本地: %s -> 远程: %s", rule_num, listen, remote
             if (comment != "") {
@@ -402,26 +404,7 @@ delete_rule() {
         return
     fi
     
-    echo "当前规则:"
-    # 显示所有规则及其编号
-    awk -F'"' '
-    /\[\[endpoints\]\]/ {
-        rule_num++
-        getline
-        listen = $2
-        getline
-        remote = $2
-        comment = ""
-        getline
-        if ($0 ~ /^# /) {
-            comment = substr($0, 3)
-        }
-        printf "%-4d: 本地: %s -> 远程: %s", rule_num, listen, remote
-        if (comment != "") {
-            printf " (备注: %s)", comment
-        }
-        printf "\n"
-    }' "$CONFIG_FILE"
+    view_rules
     
     echo
     echo -e "${YELLOW}请输入要删除的规则编号，多个编号用空格分隔 (如: 1 2 3 或 1 3):${NC}"
@@ -433,62 +416,69 @@ delete_rule() {
         return
     fi
     
-    local sorted_rule_ids=($(echo "$rule_ids" | tr ' ' '\n' | sort -nr | uniq))
-    local sed_expressions=()
-    local all_rules_found=true
-
-    for rule_id in "${sorted_rule_ids[@]}"; do
-        if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
-            echo -e "${RED}错误: 无效的规则编号: $rule_id${NC}"
-            all_rules_found=false
-            continue
+    # 验证输入是否都是数字
+    for id in $rule_ids; do
+        if ! [[ $id =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}错误: 输入 '$id' 不是有效的规则编号。${NC}"
+            sleep 2
+            return
         fi
-
-        # 根据原始配置文件计算行号范围
-        local start_line=$(awk -v target="$rule_id" '
-        BEGIN { count = 0 }
-        /\[\[endpoints\]\]/ {
-            count++
-            if (count == target) {
-                print NR
-                exit
-            }
-        }' "$CONFIG_FILE")
-        
-        if [ -z "$start_line" ]; then
-            echo -e "${RED}警告: 无法在原始配置中定位规则 #${rule_id}，已跳过。${NC}"
-            all_rules_found=false
-            continue
-        fi
-        
-        local end_line=$(awk -v start="$start_line" '
-        NR > start && /\[\[endpoints\]\]/ {
-            print NR - 1
-            exit
-        }
-        END {
-            if (NR >= start) print NR
-        }' "$CONFIG_FILE")
-        
-        # 将sed删除命令添加到数组
-        sed_expressions+=("-e" "${start_line},${end_line}d")
     done
     
-    # 检查是否收集到了任何有效的删除命令
-    if [ ${#sed_expressions[@]} -gt 0 ]; then
-        # 创建临时文件并执行一次性的sed删除操作
-        local temp_file=$(mktemp)
-        sed "${sed_expressions[@]}" "$CONFIG_FILE" > "$temp_file"
-        mv "$temp_file" "$CONFIG_FILE"
-        echo -e "${GREEN}选择的规则已成功删除!${NC}"
-    else
-        echo -e "${YELLOW}没有有效的规则被删除。${NC}"
+    # 将要删除的规则编号格式化为 " 1 2 5 " 的形式，便于awk匹配
+    local delete_list=" $(echo "$rule_ids" | tr ' ' '\n' | sort -n | uniq | tr '\n' ' ') "
+    
+    local temp_file=$(mktemp)
+    
+    # 使用awk重建配置文件，跳过需要删除的规则
+    awk -v delete_list="$delete_list" '
+    BEGIN {
+        rule_counter = 0
+        buffer = ""
+        in_block = 0
+    }
+    
+    function flush_buffer() {
+        if (in_block) {
+            if (delete_list !~ " " rule_counter " ") {
+                printf "%s", buffer
+            }
+        }
+        buffer = ""
+        in_block = 0
+    }
+    
+    /^\[\[endpoints\]\]/ {
+        flush_buffer()
+        rule_counter++
+        in_block = 1
+    }
+    
+    {
+        if (in_block) {
+            buffer = buffer $0 "\n"
+        } else {
+            print
+        }
+    }
+    
+    END {
+        flush_buffer()
+    }
+    ' "$CONFIG_FILE" > "$temp_file"
+    
+    # 安全检查：如果临时文件为空，说明可能出现严重错误，中止操作
+    if [ ! -s "$temp_file" ] && [ "$rule_count" -gt 0 ]; then
+        echo -e "${RED}错误：处理后的配置文件为空！为安全起见，已中止删除操作。${NC}"
+        rm -f "$temp_file"
+        sleep 2
+        return
     fi
     
-    if ! $all_rules_found; then
-        echo -e "${YELLOW}部分规则编号无效或未找到，请核对。${NC}"
-    fi
-
+    # 用新生成的配置文件替换旧的
+    mv "$temp_file" "$CONFIG_FILE"
+    echo -e "${GREEN}选择的规则已成功删除!${NC}"
+    
     # 询问是否重启服务
     read -p "是否立即重启服务使配置生效? (y/n): " restart
     if [[ $restart == "y" || $restart == "Y" ]]; then
@@ -509,28 +499,7 @@ edit_rule() {
         return
     fi
     
-    echo "当前规则:"
-    # 显示所有规则及其编号
-    awk -F'"' '
-    /\[\[endpoints\]\]/ {
-        rule_num++
-        getline
-        listen = $2
-        getline
-        remote = $2
-        # 检查是否有备注
-        comment = ""
-        getline
-        if ($0 ~ /^# /) {
-            comment = substr($0, 3)
-            getline
-        }
-        printf "%-4d: 本地: %s -> 远程: %s", rule_num, listen, remote
-        if (comment != "") {
-            printf " (备注: %s)", comment
-        }
-        printf "\n"
-    }' "$CONFIG_FILE"
+    view_rules
     
     echo
     read -p "请输入要修改的规则编号: " rule_id
@@ -541,26 +510,20 @@ edit_rule() {
         return
     fi
     
-    # BUG FIX: Switched to AWK with -F'"' to correctly parse values inside quotes.
-    local current_values=$(awk -F'"' -v target="$rule_id" '
-    BEGIN { count = 0 }
-    /\[\[endpoints\]\]/ {
-        count++
-        if (count == target) {
-            getline; listen=$2;
-            getline; remote=$2;
-            # Hold the current position
-            current_pos = RSTART + RLENGTH
-            getline; comment="";
-            if ($0 ~ /^# /) { comment=substr($0, 3) }
-            print listen "|" remote "|" comment
-            exit
-        }
-    }' "$CONFIG_FILE")
-
-    local current_listen=$(echo "$current_values" | cut -d'|' -f1)
-    local current_remote=$(echo "$current_values" | cut -d'|' -f2)
-    local current_comment=$(echo "$current_values" | cut -d'|' -f3)
+    # 使用awk安全地提取指定规则块的内容
+    local rule_block=$(awk -v target="$rule_id" '
+        BEGIN {RS=""; FS="\n"; ORS="\n\n"} 
+        /^\[\[endpoints\]\]/ {
+            count++;
+            if (count == target) {
+                print $0;
+                exit;
+            }
+        }' "$CONFIG_FILE")
+    
+    local current_listen=$(echo "$rule_block" | grep 'listen' | awk -F'"' '{print $2}')
+    local current_remote=$(echo "$rule_block" | grep 'remote' | awk -F'"' '{print $2}')
+    local current_comment=$(echo "$rule_block" | grep '^#' | sed 's/^# //')
     
     local current_local_port=$(echo "$current_listen" | cut -d':' -f2)
     local current_remote_addr=$(echo "$current_remote" | cut -d':' -f1)
@@ -579,7 +542,6 @@ edit_rule() {
             continue
         fi
         
-        # BUG FIX: This check now only runs if the port is actually changed.
         if [ "$new_local_port" != "$current_local_port" ]; then
             if ss -tln | grep -q ":$new_local_port " || ss -uln | grep -q ":$new_local_port "; then
                 echo -e "${RED}错误: 端口 $new_local_port 正在被其他程序占用!${NC}"
@@ -612,33 +574,53 @@ edit_rule() {
     read -p "新规则备注 [当前: $current_comment]: " new_comment
     new_comment=${new_comment:-$current_comment}
     echo -e "${CYAN}--------------------------------------------------${NC}"
-
-    # 查找规则的起始行
-    local start_line=$(awk -v target="$rule_id" 'BEGIN {c=0} /\[\[endpoints\]\]/{c++; if(c==target){print NR; exit}}' "$CONFIG_FILE")
-    local listen_line=$((start_line + 1))
-    local remote_line=$((start_line + 2))
-
-    # 查找可能存在的备注行
-    local comment_line=$(awk -v start="$start_line" '
-    NR > start + 2 && /^# / { print NR; exit }
-    NR > start + 2 && /\[\[endpoints\]\]/ { exit }' "$CONFIG_FILE")
-
-    # 应用修改
-    sed -i "${listen_line}s/.*/listen = \"0.0.0.0:$new_local_port\"/" "$CONFIG_FILE"
-    sed -i "${remote_line}s/.*/remote = \"$new_remote_addr:$new_remote_port\"/" "$CONFIG_FILE"
-
-    # 处理备注
-    if [ -n "$comment_line" ]; then
-        if [ -z "$new_comment" ]; then
-            sed -i "${comment_line}d" "$CONFIG_FILE"
-        else
-            sed -i "${comment_line}s/.*/# $new_comment/" "$CONFIG_FILE"
-        fi
-    else
-        if [ -n "$new_comment" ]; then
-            sed -i "${remote_line}a# $new_comment" "$CONFIG_FILE"
-        fi
+    
+    # 构建新的规则内容
+    local new_rule_content="[[endpoints]]\nlisten = \"0.0.0.0:$new_local_port\"\nremote = \"$new_remote_addr:$new_remote_port\""
+    if [ -n "$new_comment" ]; then
+        new_rule_content+="\n# $new_comment"
     fi
+
+    # 使用awk进行替换
+    local temp_file=$(mktemp)
+    awk -v target="$rule_id" -v new_content="$new_rule_content" '
+        BEGIN {
+            rule_counter = 0;
+            in_block = 0;
+            skip_print = 0;
+        }
+
+        /^\[\[endpoints\]\]/ {
+            if (in_block) {
+                # This handles case where blocks are not separated by newlines
+                if (!skip_print) { printf "%s", buffer; }
+            }
+            buffer = "";
+            in_block = 1;
+            skip_print = 0;
+            rule_counter++;
+            if (rule_counter == target) {
+                print new_content;
+                skip_print = 1;
+            }
+        }
+        
+        {
+            if (in_block && !skip_print) {
+                buffer = buffer $0 ORS;
+            } else if (!in_block) {
+                print;
+            }
+        }
+
+        END {
+            if (in_block && !skip_print) {
+                printf "%s", buffer;
+            }
+        }
+    ' "$CONFIG_FILE" > "$temp_file"
+
+    mv "$temp_file" "$CONFIG_FILE"
 
     echo -e "${GREEN}规则 #${rule_id} 更新成功!${NC}"
     
@@ -649,6 +631,7 @@ edit_rule() {
     fi
     sleep 1
 }
+
 
 # 服务管理
 service_control() {
