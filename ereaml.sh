@@ -3,9 +3,9 @@
 # ==============================================================================
 # E-Realm 管理面板
 # ==============================================================================
-PANEL_VERSION="1.1.5"
+PANEL_VERSION="1.1.6" # 版本号提升
 REALM_VERSION="2.9.2"
-UPDATE_LOG="v1.1.5: 修复删除/修改规则时, 显示列表后需要多余回车的逻辑缺陷."
+UPDATE_LOG="v1.1.6: 增强备份管理,增加删除备份和操作可中断逻辑. 优化修改规则流程,允许中途取消."
 # ==============================================================================
 
 REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
@@ -89,7 +89,7 @@ show_main_menu() {
     echo "4. 服务管理"
     echo "5. 备份与恢复"
     echo "6. 查看服务状态"
-    echo "00. 退出"
+    echo "0. 退出"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
 }
@@ -107,7 +107,7 @@ show_rule_menu() {
     echo "2. 查看转发规则"
     echo "3. 删除转发规则"
     echo "4. 修改转发规则"
-    echo "00. 返回主菜单"
+    echo "0. 返回主菜单"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
 }
@@ -132,7 +132,7 @@ show_service_menu() {
     echo "3. 重启服务"
     echo "4. 启用开机启动"
     echo "5. 禁用开机启动"
-    echo "00. 返回主菜单"
+    echo "0. 返回主菜单"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
 }
@@ -148,7 +148,8 @@ show_backup_menu() {
     echo -e "${CYAN}==================================================${NC}"
     echo "1. 备份配置"
     echo "2. 恢复备份"
-    echo "00. 返回主菜单"
+    echo "3. 删除备份"
+    echo "0. 返回主菜单"
     echo -e "${CYAN}==================================================${NC}"
     echo -n "请选择操作: "
 }
@@ -157,13 +158,9 @@ show_backup_menu() {
 fix_service_config() {
     echo -e "${GREEN}修复服务配置...${NC}"
     
-    # 停止服务
     systemctl stop realm 2>/dev/null
-    
-    # 删除旧的服务文件
     rm -f "$SERVICE_FILE"
     
-    # 创建新的服务文件
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Realm Port Forwarding
@@ -180,7 +177,6 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
     
-    # 重新加载系统服务
     systemctl daemon-reload
     systemctl enable realm
     
@@ -191,7 +187,6 @@ EOF
 install_realm() {
     echo -e "${GREEN}正在安装 Realm v${REALM_VERSION}...${NC}"
     
-    # 检查是否已安装
     if [ -f /usr/local/bin/realm ]; then
         echo -e "${YELLOW}Realm 已经安装，是否需要重新安装? (y/n): ${NC}"
         read reinstall
@@ -200,28 +195,23 @@ install_realm() {
         fi
     fi
     
-    # 创建配置目录
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$BACKUP_DIR"
     
-    # 下载并安装 Realm
     cd /tmp
     wget "$REALM_URL" -O realm.tar.gz
     tar -xzf realm.tar.gz
     mv realm /usr/local/bin/
     chmod +x /usr/local/bin/realm
     
-    # 删除旧的JSON配置文件
     rm -f "$CONFIG_DIR/config.json"
     
-    # 创建初始配置文件 (TOML格式)
     if [ ! -f "$CONFIG_FILE" ]; then
         cat > "$CONFIG_FILE" << 'EOF'
 [log]
 level = "warn"
 
 [dns]
-# mode = "ipv6_then_ipv4" # ipv4_then_ipv6, ipv6_then_ipv4
 mode = "ipv4_then_ipv6"
 
 [network]
@@ -232,10 +222,8 @@ accept_mptcp = false
 EOF
     fi
     
-    # 修复服务配置
     fix_service_config
     
-    # 创建监控脚本 (改为20分钟检测一次)
     cat > /opt/realm_monitor.sh << 'EOF'
 #!/bin/bash
 if ! pgrep -x "realm" > /dev/null; then
@@ -245,11 +233,7 @@ fi
 EOF
     
     chmod +x /opt/realm_monitor.sh
-    
-    # 设置定时任务检查活性 (改为20分钟一次)
     echo "*/20 * * * * root /opt/realm_monitor.sh" > "$CRON_FILE"
-    
-    # 启动服务
     systemctl start realm
     
     echo -e "${GREEN}Realm 安装完成!${NC}"
@@ -260,24 +244,17 @@ EOF
 uninstall_realm() {
     echo -e "${RED}正在卸载 Realm...${NC}"
     
-    # 确认卸载
     read -p "确定要卸载 Realm 吗? 此操作不可逆! (y/n): " confirm
     if [[ $confirm != "y" && $confirm != "Y" ]]; then
         echo "取消卸载"
         return
     fi
     
-    # 停止服务
     systemctl stop realm
     systemctl disable realm
     
-    # 删除文件
-    rm -f /usr/local/bin/realm
-    rm -f "$SERVICE_FILE"
-    rm -f "$CRON_FILE"
-    rm -f /opt/realm_monitor.sh
+    rm -f /usr/local/bin/realm "$SERVICE_FILE" "$CRON_FILE" /opt/realm_monitor.sh
     
-    # 重新加载系统服务
     systemctl daemon-reload
     
     echo -e "${GREEN}Realm 已卸载!${NC}"
@@ -292,51 +269,35 @@ add_rule() {
     
     while true; do
         read -p "请输入本地监听端口 (输入 0 返回): " local_port
-
-        # 允许用户输入0返回
-        if [[ "$local_port" == "0" ]]; then
-            return
-        fi
+        if [[ "$local_port" == "0" ]]; then return; fi
         
-        # 验证输入是否为1-65535之间的数字
         if ! [[ $local_port =~ ^[0-9]+$ ]] || [ "$local_port" -lt 1 ] || [ "$local_port" -gt 65535 ]; then
-            echo -e "${RED}错误: 端口无效! 必须是1-65535之间的数字，请重新输入。${NC}"
+            echo -e "${RED}错误: 端口无效! 必须是1-65535之间的数字。${NC}"
             continue
         fi
-        
-        # 使用ss命令检测端口是否被系统其他程序占用 (TCP或UDP)
         if ss -tln | grep -q ":$local_port " || ss -uln | grep -q ":$local_port "; then
-            echo -e "${RED}错误: 端口 $local_port 正在被其他程序占用，请重新输入!${NC}"
+            echo -e "${RED}错误: 端口 $local_port 正在被其他程序占用!${NC}"
             continue
         fi
-        
-        # 检查配置文件中是否已存在相同监听端口的规则
         if grep -q "listen = \"0.0.0.0:$local_port\"" "$CONFIG_FILE"; then
-            echo -e "${RED}错误: 本地端口 $local_port 已被其他转发规则占用，请重新输入!${NC}"
+            echo -e "${RED}错误: 本地端口 $local_port 已被其他转发规则占用!${NC}"
             continue
         fi
-
-        # 如果所有检查都通过，则跳出循环
-        echo -e "${GREEN}端口 $local_port 可用，请继续...${NC}"
+        echo -e "${GREEN}端口 $local_port 可用。${NC}"
         break
     done
     
     read -p "请输入远程服务器地址: " remote_addr
     read -p "请输入远程服务器端口: " remote_port
-    read -p "请输入规则备注(可选，直接回车跳过): " comment
+    read -p "请输入规则备注(可选): " comment
     
-    # 验证远程端口输入
     if ! [[ $remote_port =~ ^[0-9]+$ ]] || [ "$remote_port" -lt 1 ] || [ "$remote_port" -gt 65535 ]; then
-        echo -e "${RED}错误: 远程端口无效! 添加失败，原因: 端口必须是1-65535之间的数字。${NC}"
-        sleep 2
-        return 1
+        echo -e "${RED}错误: 远程端口无效! 添加失败。${NC}"
+        sleep 2; return 1
     fi
     
-    # 添加新规则到配置文件
-    # 确保文件末尾有换行符
-    if [ -s "$CONFIG_FILE" ] && [ "$(tail -c 1 "$CONFIG_FILE")" != "" ]; then
-        echo "" >> "$CONFIG_FILE"
-    fi
+    if [ -s "$CONFIG_FILE" ] && [ "$(tail -c 1 "$CONFIG_FILE")" != "" ]; then echo "" >> "$CONFIG_FILE"; fi
+    
     cat >> "$CONFIG_FILE" <<EOF
 
 [[endpoints]]
@@ -344,14 +305,9 @@ listen = "0.0.0.0:$local_port"
 remote = "$remote_addr:$remote_port"
 EOF
     
-    # 添加备注（如果有）
-    if [ -n "$comment" ]; then
-        echo "# $comment" >> "$CONFIG_FILE"
-    fi
+    if [ -n "$comment" ]; then echo "# $comment" >> "$CONFIG_FILE"; fi
     
     echo -e "${GREEN}规则添加成功!${NC}"
-    
-    # 询问是否重启服务
     read -p "是否立即重启服务使配置生效? (y/n): " restart
     if [[ $restart == "y" || $restart == "Y" ]]; then
         systemctl restart realm
@@ -360,8 +316,7 @@ EOF
     sleep 1
 }
 
-
-# 查看转发规则 (可以接受 "wait" 参数来决定是否暂停)
+# 查看转发规则
 view_rules() {
     echo -e "${GREEN}当前转发规则:${NC}"
     local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
@@ -369,28 +324,19 @@ view_rules() {
     if [ "$rule_count" -eq 0 ]; then
         echo "暂无转发规则"
     else
-        # 提取并显示所有规则（包括备注）
         awk -F'"' '
         /\[\[endpoints\]\]/ {
             rule_num++
-            getline
-            listen = $2
-            getline
-            remote = $2
+            getline; listen = $2
+            getline; remote = $2
             comment = ""
-            # Safely check for a comment on the next line
-            if (getline > 0 && $0 ~ /^# /) {
-                comment = substr($0, 3)
-            }
+            if (getline > 0 && $0 ~ /^# /) { comment = substr($0, 3) }
             printf "%-4d: 本地: %s -> 远程: %s", rule_num, listen, remote
-            if (comment != "") {
-                printf " (备注: %s)", comment
-            }
+            if (comment != "") { printf " (备注: %s)", comment }
             printf "\n"
         }' "$CONFIG_FILE"
     fi
 
-    # 如果第一个参数是 "wait"，则暂停等待用户按回车
     if [[ "$1" == "wait" ]]; then
         echo -e "\n按回车键返回..."
         read
@@ -400,144 +346,67 @@ view_rules() {
 # 删除转发规则
 delete_rule() {
     echo -e "${GREEN}删除转发规则${NC}"
-    
     local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
-    if [ "$rule_count" -eq 0 ]; then
-        echo "暂无转发规则可删除"
-        sleep 1
-        return
-    fi
+    if [ "$rule_count" -eq 0 ]; then echo "暂无转发规则可删除"; sleep 1; return; fi
     
-    view_rules # 调用 view_rules 显示列表，但不暂停
-    
+    view_rules
     echo
-    echo -e "${YELLOW}请输入要删除的规则编号，多个编号用空格分隔 (如: 1 2 3 或 1 3):${NC}"
+    echo -e "${YELLOW}请输入要删除的规则编号，多个用空格分隔 (输入 0 返回):${NC}"
     read -p "请输入: " rule_ids
     
-    if [ -z "$rule_ids" ]; then
-        echo -e "${RED}未输入任何规则编号!${NC}"
-        sleep 1
-        return
-    fi
+    if [[ -z "$rule_ids" || "$rule_ids" == "0" ]]; then echo "操作取消"; sleep 1; return; fi
     
-    # 验证输入是否都是数字
     for id in $rule_ids; do
-        if ! [[ $id =~ ^[0-9]+$ ]]; then
-            echo -e "${RED}错误: 输入 '$id' 不是有效的规则编号。${NC}"
-            sleep 2
-            return
-        fi
+        if ! [[ $id =~ ^[0-9]+$ ]]; then echo -e "${RED}错误: 输入 '$id' 不是有效编号。${NC}"; sleep 2; return; fi
     done
     
-    # 将要删除的规则编号格式化为 " 1 2 5 " 的形式，便于awk匹配
     local delete_list=" $(echo "$rule_ids" | tr ' ' '\n' | sort -n | uniq | tr '\n' ' ') "
-    
     local temp_file=$(mktemp)
     
-    # 使用awk重建配置文件，跳过需要删除的规则
     awk -v delete_list="$delete_list" '
-    BEGIN {
-        rule_counter = 0
-        buffer = ""
-        in_block = 0
-    }
-    
-    function flush_buffer() {
-        if (in_block) {
-            if (delete_list !~ " " rule_counter " ") {
-                printf "%s", buffer
-            }
-        }
-        buffer = ""
-        in_block = 0
-    }
-    
-    /^\[\[endpoints\]\]/ {
-        flush_buffer()
-        rule_counter++
-        in_block = 1
-    }
-    
-    {
-        if (in_block) {
-            buffer = buffer $0 "\n"
-        } else {
-            print
-        }
-    }
-    
-    END {
-        flush_buffer()
-    }
+    BEGIN { rule_counter=0; buffer=""; in_block=0 }
+    function flush_buffer() { if (in_block && delete_list !~ " " rule_counter " ") { printf "%s", buffer } buffer=""; in_block=0 }
+    /^\[\[endpoints\]\]/ { flush_buffer(); rule_counter++; in_block=1 }
+    { if (in_block) { buffer=buffer $0 "\n" } else { print } }
+    END { flush_buffer() }
     ' "$CONFIG_FILE" > "$temp_file"
     
-    # 安全检查：如果临时文件为空，并且原始文件中有规则，说明可能出现严重错误，中止操作
     if [ ! -s "$temp_file" ] && [ "$rule_count" -gt 0 ] && [ ${#rule_ids} -lt $rule_count ]; then
-        echo -e "${RED}错误：处理后的配置文件为空！为安全起见，已中止删除操作。${NC}"
-        rm -f "$temp_file"
-        sleep 2
-        return
+        echo -e "${RED}错误：处理后配置文件为空！已中止删除操作。${NC}"; rm -f "$temp_file"; sleep 2; return
     fi
     
-    # 用新生成的配置文件替换旧的
     mv "$temp_file" "$CONFIG_FILE"
     echo -e "${GREEN}选择的规则已成功删除!${NC}"
-    
-    # 询问是否重启服务
     read -p "是否立即重启服务使配置生效? (y/n): " restart
-    if [[ $restart == "y" || $restart == "Y" ]]; then
-        systemctl restart realm
-        echo -e "${GREEN}服务已重启!${NC}"
-    fi
+    if [[ $restart == "y" || $restart == "Y" ]]; then systemctl restart realm; echo -e "${GREEN}服务已重启!${NC}"; fi
     sleep 1
 }
 
 # 修改转发规则
 edit_rule() {
     echo -e "${GREEN}修改转发规则${NC}"
-    
     local rule_count=$(grep -c "\[\[endpoints\]\]" "$CONFIG_FILE" 2>/dev/null || echo "0")
-    if [ "$rule_count" -eq 0 ]; then
-        echo "暂无转发规则可修改"
-        sleep 1
-        return
-    fi
+    if [ "$rule_count" -eq 0 ]; then echo "暂无转发规则可修改"; sleep 1; return; fi
     
-    view_rules # 调用 view_rules 显示列表，但不暂停
-    
+    view_rules
     echo
-    read -p "请输入要修改的规则编号: " rule_id
-    
-    if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
-        echo -e "${RED}无效的规则编号!${NC}"
-        sleep 1
-        return
-    fi
-    
-    # --- Start of FIX ---
-    # 使用更健壮的 awk 命令来提取规则块，此命令不依赖于规则之间的空行
-    local rule_block=$(awk -v target="$rule_id" '
-        BEGIN { count = 0; printing = 0; }
-        /^\[\[endpoints\]\]/ {
-            if (printing) { exit; } # 如果已在打印状态，遇到下一个块就退出
-            count++;
-            if (count == target) {
-                printing = 1;
-            }
-        }
-        printing { print; }' "$CONFIG_FILE")
-    # --- End of FIX ---
+    read -p "请输入要修改的规则编号 (输入 0 返回): " rule_id
+    if [[ "$rule_id" == "0" ]]; then return; fi
 
-    if [ -z "$rule_block" ]; then
-        echo -e "${RED}错误：无法提取规则 #${rule_id} 的信息。${NC}"
-        sleep 2
-        return
+    if ! [[ $rule_id =~ ^[0-9]+$ ]] || [ "$rule_id" -lt 1 ] || [ "$rule_id" -gt "$rule_count" ]; then
+        echo -e "${RED}无效的规则编号!${NC}"; sleep 1; return
     fi
+    
+    local rule_block=$(awk -v target="$rule_id" '
+        BEGIN { count=0; printing=0 }
+        /^\[\[endpoints\]\]/ { if (printing) exit; count++; if (count == target) printing=1 }
+        printing { print }' "$CONFIG_FILE")
+
+    if [ -z "$rule_block" ]; then echo -e "${RED}错误：无法提取规则 #${rule_id} 信息。${NC}"; sleep 2; return; fi
     
     local current_listen=$(echo -e "$rule_block" | grep 'listen' | awk -F'"' '{print $2}')
     local current_remote=$(echo -e "$rule_block" | grep 'remote' | awk -F'"' '{print $2}')
     local current_comment=$(echo -e "$rule_block" | grep '^#' | sed 's/^# //')
-    
     local current_local_port=$(echo "$current_listen" | cut -d':' -f2)
     local current_remote_addr=$(echo "$current_remote" | cut -d':' -f1)
     local current_remote_port=$(echo "$current_remote" | cut -d':' -f2)
@@ -545,131 +414,92 @@ edit_rule() {
     echo -e "${CYAN}--------------------------------------------------${NC}"
     echo "正在修改规则 #${rule_id}. 请输入新值, 或按 Enter 保留当前值."
     
-    # 获取新的本地端口
     while true; do
-        read -p "新本地监听端口 [当前: $current_local_port]: " new_local_port
+        read -p "新本地监听端口 [当前: $current_local_port] (输入0取消): " new_local_port
+        if [[ "$new_local_port" == "0" ]]; then echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return; fi
         new_local_port=${new_local_port:-$current_local_port}
-        
         if ! [[ $new_local_port =~ ^[0-9]+$ ]] || [ "$new_local_port" -lt 1 ] || [ "$new_local_port" -gt 65535 ]; then
-            echo -e "${RED}错误: 端口无效! 必须是1-65535之间的数字。${NC}"
-            continue
+            echo -e "${RED}错误: 端口无效!${NC}"; continue
         fi
-        
         if [ "$new_local_port" != "$current_local_port" ]; then
             if ss -tln | grep -q ":$new_local_port " || ss -uln | grep -q ":$new_local_port "; then
-                echo -e "${RED}错误: 端口 $new_local_port 正在被其他程序占用!${NC}"
-                continue
+                echo -e "${RED}错误: 端口 $new_local_port 被其他程序占用!${NC}"; continue
             fi
             if grep -q "listen = \"0.0.0.0:$new_local_port\"" "$CONFIG_FILE"; then
-                echo -e "${RED}错误: 本地端口 $new_local_port 已被其他转发规则占用!${NC}"
-                continue
+                echo -e "${RED}错误: 本地端口 $new_local_port 已被其他规则占用!${NC}"; continue
             fi
         fi
         break
     done
 
-    # 获取新的远程地址
-    read -p "新远程服务器地址 [当前: $current_remote_addr]: " new_remote_addr
+    read -p "新远程服务器地址 [当前: $current_remote_addr] (输入0取消): " new_remote_addr
+    if [[ "$new_remote_addr" == "0" ]]; then echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return; fi
     new_remote_addr=${new_remote_addr:-$current_remote_addr}
     
-    # 获取新的远程端口
     while true; do
-        read -p "新远程服务器端口 [当前: $current_remote_port]: " new_remote_port
+        read -p "新远程服务器端口 [当前: $current_remote_port] (输入0取消): " new_remote_port
+        if [[ "$new_remote_port" == "0" ]]; then echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return; fi
         new_remote_port=${new_remote_port:-$current_remote_port}
         if ! [[ $new_remote_port =~ ^[0-9]+$ ]] || [ "$new_remote_port" -lt 1 ] || [ "$new_remote_port" -gt 65535 ]; then
-            echo -e "${RED}错误: 远程端口无效! 必须是1-65535之间的数字。${NC}"
-            continue
+            echo -e "${RED}错误: 远程端口无效!${NC}"; continue
         fi
         break
     done
     
-    # 获取新的备注
-    read -p "新规则备注 [当前: $current_comment]: " new_comment
+    read -p "新规则备注 [当前: $current_comment] (输入0取消): " new_comment
+    if [[ "$new_comment" == "0" ]]; then echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return; fi
     new_comment=${new_comment:-$current_comment}
     echo -e "${CYAN}--------------------------------------------------${NC}"
     
-    # 构建新的规则内容
     local new_rule_content="[[endpoints]]\nlisten = \"0.0.0.0:$new_local_port\"\nremote = \"$new_remote_addr:$new_remote_port\""
-    if [ -n "$new_comment" ]; then
-        new_rule_content+="\n# $new_comment"
-    fi
+    if [ -n "$new_comment" ]; then new_rule_content+="\n# $new_comment"; fi
 
-    # 使用awk进行替换
     local temp_file=$(mktemp)
     awk -v target="$rule_id" -v new_content="$new_rule_content" '
-        BEGIN {
-            rule_counter = 0;
-            in_block = 0;
-            skip_print = 0;
-            buffer = ""
-        }
-
+        BEGIN { rule_counter=0; in_block=0; skip_print=0; buffer="" }
         /^\[\[endpoints\]\]/ {
-            if (in_block) {
-                if (!skip_print) { printf "%s", buffer; }
-            }
-            buffer = "";
-            in_block = 1;
-            skip_print = 0;
-            rule_counter++;
-            if (rule_counter == target) {
-                print new_content;
-                skip_print = 1;
-            }
+            if (in_block) { if (!skip_print) printf "%s", buffer }
+            buffer=""; in_block=1; skip_print=0; rule_counter++;
+            if (rule_counter == target) { print new_content; skip_print=1 }
         }
-        
-        {
-            if (in_block && !skip_print) {
-                buffer = buffer $0 ORS;
-            } else if (!in_block) {
-                print;
-            }
-        }
-
-        END {
-            if (in_block && !skip_print) {
-                printf "%s", buffer;
-            }
-        }
+        { if (in_block && !skip_print) buffer = buffer $0 ORS; else if (!in_block) print }
+        END { if (in_block && !skip_print) printf "%s", buffer }
     ' "$CONFIG_FILE" > "$temp_file"
 
     mv "$temp_file" "$CONFIG_FILE"
-
     echo -e "${GREEN}规则 #${rule_id} 更新成功!${NC}"
     
     read -p "是否立即重启服务使配置生效? (y/n): " restart
-    if [[ $restart == "y" || $restart == "Y" ]]; then
-        systemctl restart realm
-        echo -e "${GREEN}服务已重启!${NC}"
-    fi
+    if [[ $restart == "y" || $restart == "Y" ]]; then systemctl restart realm; echo -e "${GREEN}服务已重启!${NC}"; fi
     sleep 1
 }
 
-
 # 服务管理
 service_control() {
-    local action=$1
-    systemctl $action realm
-    echo -e "${GREEN}服务已${action}${NC}"
+    systemctl $1 realm
+    echo -e "${GREEN}服务已$1!${NC}"
     sleep 1
 }
 
 # 启用/禁用开机启动
 toggle_autostart() {
-    local action=$1
-    
-    if [[ $action == "enable" ]]; then
-        systemctl enable realm
-        echo -e "${GREEN}已启用开机启动!${NC}"
+    if [[ $1 == "enable" ]]; then
+        systemctl enable realm; echo -e "${GREEN}已启用开机启动!${NC}"
     else
-        systemctl disable realm
-        echo -e "${GREEN}已禁用开机启动!${NC}"
+        systemctl disable realm; echo -e "${GREEN}已禁用开机启动!${NC}"
     fi
     sleep 1
 }
 
 # 备份配置
 backup_config() {
+    read -p "确定要创建新备份吗? (y/n, 默认y, 输入0取消): " confirm
+    if [[ "$confirm" == "0" ]]; then
+        echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return
+    elif [[ -n "$confirm" && "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo -e "${YELLOW}操作已取消。${NC}"; sleep 1; return
+    fi
+
     local timestamp=$(date +%Y%m%d_%H%M%S)
     local backup_file="$BACKUP_DIR/${HOSTNAME}_backup_$timestamp.toml"
     
@@ -685,39 +515,90 @@ backup_config() {
 
 # 恢复备份
 restore_backup() {
-    echo -e "${GREEN}可用的备份文件:${NC}"
+    echo -e "${GREEN}可用的备份文件 (编号从1开始):${NC}"
     mkdir -p "$BACKUP_DIR"
-    local backups=($(ls -1 "$BACKUP_DIR"/*.toml 2>/dev/null))
+    local backups=("$BACKUP_DIR"/*.toml)
     
-    if [ ${#backups[@]} -eq 0 ]; then
-        echo "暂无备份文件"
-        sleep 1
-        return
-    fi
+    if [ ! -f "${backups[0]}" ]; then echo "暂无备份文件"; sleep 1; return; fi
     
     for i in "${!backups[@]}"; do
-        echo "$i: ${backups[$i]}"
+        echo "$((i+1)): $(basename "${backups[$i]}")"
     done
     
     echo
-    read -p "请选择要恢复的备份编号: " backup_id
+    read -p "请选择要恢复的备份编号 (输入 0 返回): " backup_id
     
-    if ! [[ $backup_id =~ ^[0-9]+$ ]] || [ $backup_id -ge ${#backups[@]} ]; then
-        echo -e "${RED}无效的备份编号!${NC}"
-        sleep 1
-        return
+    if [[ "$backup_id" == "0" ]]; then echo "操作取消"; return; fi
+    
+    if ! [[ $backup_id =~ ^[0-9]+$ ]] || [ "$backup_id" -lt 1 ] || [ "$backup_id" -gt ${#backups[@]} ]; then
+        echo -e "${RED}无效的备份编号!${NC}"; sleep 1; return
     fi
     
-    cp "${backups[$backup_id]}" "$CONFIG_FILE"
-    echo -e "${GREEN}配置已从 ${backups[$backup_id]} 恢复${NC}"
+    local target_backup_file=${backups[$((backup_id-1))]}
+    cp "$target_backup_file" "$CONFIG_FILE"
+    echo -e "${GREEN}配置已从 $(basename "$target_backup_file") 恢复${NC}"
     
-    # 询问是否重启服务
     read -p "是否立即重启服务使配置生效? (y/n): " restart
     if [[ $restart == "y" || $restart == "Y" ]]; then
         systemctl restart realm
         echo -e "${GREEN}服务已重启!${NC}"
     fi
     sleep 1
+}
+
+# 删除备份
+delete_backup() {
+    echo -e "${GREEN}可用的备份文件 (编号从1开始):${NC}"
+    mkdir -p "$BACKUP_DIR"
+    local backups=("$BACKUP_DIR"/*.toml)
+    
+    if [ ! -f "${backups[0]}" ]; then echo "暂无备份文件"; sleep 1; return; fi
+    
+    for i in "${!backups[@]}"; do
+        echo "$((i+1)): $(basename "${backups[$i]}")"
+    done
+    
+    echo
+    read -p "请输入要删除的备份编号，多个用空格分隔 (输入 0 返回): " backup_ids
+    
+    if [[ -z "$backup_ids" || "$backup_ids" == "0" ]]; then echo "操作取消"; sleep 1; return; fi
+    
+    local files_to_delete=()
+    local invalid_ids=()
+    
+    for id in $backup_ids; do
+        if [[ $id =~ ^[0-9]+$ ]] && [ "$id" -ge 1 ] && [ "$id" -le ${#backups[@]} ]; then
+            files_to_delete+=("${backups[$((id-1))]}")
+        else
+            invalid_ids+=("$id")
+        fi
+    done
+    
+    if [ ${#invalid_ids[@]} -ne 0 ]; then
+        echo -e "${RED}以下为无效编号: ${invalid_ids[*]}${NC}"
+    fi
+    
+    if [ ${#files_to_delete[@]} -eq 0 ]; then
+        echo -e "${YELLOW}没有有效的备份文件被选中删除。${NC}"; sleep 2; return
+    fi
+    
+    echo -e "${YELLOW}你确定要删除以下 ${#files_to_delete[@]} 个备份文件吗?${NC}"
+    for file in "${files_to_delete[@]}"; do
+        echo " - $(basename "$file")"
+    done
+    
+    read -p "此操作不可逆! (y/n): " confirm
+    if [[ $confirm != "y" && $confirm != "Y" ]]; then
+        echo -e "${YELLOW}删除操作已取消。${NC}"; sleep 1; return
+    fi
+    
+    for file in "${files_to_delete[@]}"; do
+        rm -f "$file"
+        echo -e "${GREEN}已删除: $(basename "$file")${NC}"
+    done
+    
+    echo -e "\n按任意键返回..."
+    read -n 1 -s
 }
 
 # 查看服务状态
@@ -730,22 +611,14 @@ view_status() {
 
 # 主程序
 main() {
-    # 检查root权限
-    if [ "$EUID" -ne 0 ]; then
-        echo -e "${RED}请使用root权限运行此脚本!${NC}"
-        exit 1
-    fi
+    if [ "$EUID" -ne 0 ]; then echo -e "${RED}请使用root权限运行此脚本!${NC}"; exit 1; fi
     
-    # 检查依赖
     check_dependencies
     
-    # 检查服务配置是否正确
     if [ -f "$SERVICE_FILE" ] && grep -q "config.json" "$SERVICE_FILE" 2>/dev/null; then
-        echo -e "${YELLOW}检测到旧的服务配置，正在修复...${NC}"
-        fix_service_config
+        echo -e "${YELLOW}检测到旧的服务配置，正在修复...${NC}"; fix_service_config
     fi
     
-    # 主循环
     while true; do
         show_main_menu
         read choice
@@ -755,51 +628,45 @@ main() {
             2) uninstall_realm ;;
             3) 
                 while true; do
-                    show_rule_menu
-                    read rule_choice
+                    show_rule_menu; read rule_choice
                     case $rule_choice in
                         1) add_rule ;;
-                        2) view_rules "wait" ;; # 直接查看时，传递 "wait" 参数
+                        2) view_rules "wait" ;;
                         3) delete_rule ;;
                         4) edit_rule ;;
-                        00) break ;;
+                        0) break ;;
                         *) echo -e "${RED}无效选择!${NC}"; sleep 1 ;;
                     esac
-                done
-                ;;
+                done ;;
             4) 
                 while true; do
-                    show_service_menu
-                    read service_choice
+                    show_service_menu; read service_choice
                     case $service_choice in
                         1) service_control start ;;
                         2) service_control stop ;;
                         3) service_control restart ;;
                         4) toggle_autostart enable ;;
                         5) toggle_autostart disable ;;
-                        00) break ;;
+                        0) break ;;
                         *) echo -e "${RED}无效选择!${NC}"; sleep 1 ;;
                     esac
-                done
-                ;;
+                done ;;
             5) 
                 while true; do
-                    show_backup_menu
-                    read backup_choice
+                    show_backup_menu; read backup_choice
                     case $backup_choice in
                         1) backup_config ;;
                         2) restore_backup ;;
-                        00) break ;;
+                        3) delete_backup ;;
+                        0) break ;;
                         *) echo -e "${RED}无效选择!${NC}"; sleep 1 ;;
                     esac
-                done
-                ;;
+                done ;;
             6) view_status ;;
-            00) echo -e "${GREEN}再见!${NC}"; exit 0 ;;
+            0) echo -e "${GREEN}再见!${NC}"; exit 0 ;;
             *) echo -e "${RED}无效选择!${NC}"; sleep 1 ;;
         esac
     done
 }
 
-# 启动主程序
 main
