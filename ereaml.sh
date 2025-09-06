@@ -492,6 +492,24 @@ delete_rule() {
     sleep 1
 }
 
+
+
+# 服务管理
+service_control() {
+    local action=$1
+    systemctl $action realm
+    echo -e "${GREEN}服务已${action}${NC}"
+    sleep 1
+}
+
+# 启用/禁用开机启动
+toggle_autostart() {
+    local action=$1
+    
+    if [[ $action == "enable" ]]; then
+        systemctl enable realm
+        echo -e "${GREEN}已启用开机启动!${NC}"
+    else
 # 修改转发规则
 edit_rule() {
     echo -e "${GREEN}修改转发规则${NC}"
@@ -514,20 +532,29 @@ edit_rule() {
         return
     fi
     
-    # 使用awk安全地提取指定规则块的内容
+    # --- Start of FIX ---
+    # 使用更健壮的 awk 命令来提取规则块，此命令不依赖于规则之间的空行
     local rule_block=$(awk -v target="$rule_id" '
-        BEGIN {RS=""; FS="\n"; ORS="\n\n"} 
+        BEGIN { count = 0; printing = 0; }
         /^\[\[endpoints\]\]/ {
+            if (printing) { exit; } # 如果已在打印状态，遇到下一个块就退出
             count++;
             if (count == target) {
-                print $0;
-                exit;
+                printing = 1;
             }
-        }' "$CONFIG_FILE")
+        }
+        printing { print; }' "$CONFIG_FILE")
+    # --- End of FIX ---
+
+    if [ -z "$rule_block" ]; then
+        echo -e "${RED}错误：无法提取规则 #${rule_id} 的信息。${NC}"
+        sleep 2
+        return
+    fi
     
-    local current_listen=$(echo "$rule_block" | grep 'listen' | awk -F'"' '{print $2}')
-    local current_remote=$(echo "$rule_block" | grep 'remote' | awk -F'"' '{print $2}')
-    local current_comment=$(echo "$rule_block" | grep '^#' | sed 's/^# //')
+    local current_listen=$(echo -e "$rule_block" | grep 'listen' | awk -F'"' '{print $2}')
+    local current_remote=$(echo -e "$rule_block" | grep 'remote' | awk -F'"' '{print $2}')
+    local current_comment=$(echo -e "$rule_block" | grep '^#' | sed 's/^# //')
     
     local current_local_port=$(echo "$current_listen" | cut -d':' -f2)
     local current_remote_addr=$(echo "$current_remote" | cut -d':' -f1)
@@ -635,24 +662,6 @@ edit_rule() {
     fi
     sleep 1
 }
-
-
-# 服务管理
-service_control() {
-    local action=$1
-    systemctl $action realm
-    echo -e "${GREEN}服务已${action}${NC}"
-    sleep 1
-}
-
-# 启用/禁用开机启动
-toggle_autostart() {
-    local action=$1
-    
-    if [[ $action == "enable" ]]; then
-        systemctl enable realm
-        echo -e "${GREEN}已启用开机启动!${NC}"
-    else
         systemctl disable realm
         echo -e "${GREEN}已禁用开机启动!${NC}"
     fi
