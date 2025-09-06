@@ -492,24 +492,6 @@ delete_rule() {
     sleep 1
 }
 
-
-
-# 服务管理
-service_control() {
-    local action=$1
-    systemctl $action realm
-    echo -e "${GREEN}服务已${action}${NC}"
-    sleep 1
-}
-
-# 启用/禁用开机启动
-toggle_autostart() {
-    local action=$1
-    
-    if [[ $action == "enable" ]]; then
-        systemctl enable realm
-        echo -e "${GREEN}已启用开机启动!${NC}"
-    else
 # 修改转发规则
 edit_rule() {
     echo -e "${GREEN}修改转发规则${NC}"
@@ -662,6 +644,24 @@ edit_rule() {
     fi
     sleep 1
 }
+
+
+# 服务管理
+service_control() {
+    local action=$1
+    systemctl $action realm
+    echo -e "${GREEN}服务已${action}${NC}"
+    sleep 1
+}
+
+# 启用/禁用开机启动
+toggle_autostart() {
+    local action=$1
+    
+    if [[ $action == "enable" ]]; then
+        systemctl enable realm
+        echo -e "${GREEN}已启用开机启动!${NC}"
+    else
         systemctl disable realm
         echo -e "${GREEN}已禁用开机启动!${NC}"
     fi
