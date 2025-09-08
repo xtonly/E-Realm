@@ -8,7 +8,7 @@ REALM_VERSION="2.9.2"
 UPDATE_LOG="v1.1.6: 增强备份管理,增加删除备份和操作可中断逻辑. 优化修改规则流程,允许中途取消."
 # ==============================================================================
 
-REALM_URL="https://20.205.243.166/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
+REALM_URL="https://github.com/zhboner/realm/releases/download/v${REALM_VERSION}/realm-x86_64-unknown-linux-gnu.tar.gz"
 CONFIG_DIR="/etc/realm"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 BACKUP_DIR="/opt/realm_backups"
